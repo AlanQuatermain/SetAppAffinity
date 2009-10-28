@@ -61,10 +61,10 @@ static void usage( FILE * fp, int exitCode )
 	fprintf( fp,
 			 "Usage:\n"
 			 "  %s [-h | --help]					Display this list of options.\n",
-			 "  %s [-a | --app-path] <file-path>	Set file at <file-path> to open using\n"
-			 "                                      application bundle at <app-path>.\n"
-			 "  %s [-b | --bundle-id] <file-path>	Set file at <file-path> to open using\n"
-			 "                                      application with the given bundle id.\n",
+			 "  %s [-a | --app-path] <file1> <file2> ...\n"
+			 "     Set named files to open using application bundle at <app-path>.\n"
+			 "  %s [-b | --bundle-id] <file1> <file2> ...\n"
+			 "     Set named files to open using application with a given identifier.\n",
 			 procName, procName, procName );
 	fflush( fp );
 	exit( exitCode );
@@ -190,40 +190,54 @@ int main (int argc, const char * argv[])
 	if ( optind >= argc )
 		usage( stderr, EX_USAGE );
 	
-	NSURL * fileURL = [NSURL fileURLWithPath: [NSString stringWithUTF8String: argv[optind]]];
+	// build the list of input files
+	NSMutableArray * files = [NSMutableArray array];
+	for ( int i = optind; i < argc; i++ )
+		[files addObject: [NSURL fileURLWithPath: [NSString stringWithUTF8String: argv[optind]]]];
 	
-	if ( [[NSFileManager defaultManager] fileExistsAtPath: [fileURL path]] == NO )
+	__block int result = EX_OK;
+	
+	// Use some concurrency if available-- makes more sense when files are being thrown in by a script somewhere.
+	// That said, it would make sense if I added the ability to input files using stdin (empty-line terminated?).
+	[files enumerateObjectsWithOptions: NSEnumerationConcurrent usingBlock: ^(id fileURL, NSUInteger idx, BOOL *stop)
 	{
-		fprintf( stderr, "File not found: %s", argv[optind] );
-		fflush( stderr );
-		exit( EX_DATAERR );
-	}
-	
-	// got all the URLs we need now
-	
-	// get the file's UTI
-	NSString * uti = [[fileURL resourceValuesForKeys: [NSArray arrayWithObject: NSURLTypeIdentifierKey] error: NULL] objectForKey: NSURLTypeIdentifierKey];
-	
-	// remove any old usro resource
-	// if an app wasn't specified then we only remove the resource
-	RemoveUsroResource( fileURL );
-	if ( appURL == nil )
-	{
-		[fileURL setResourceValue: [NSNull null] forKey: NSURLCustomIconKey error: NULL];
-		return ( EX_OK );
-	}
-	
-	InstallUsroResource( fileURL, appURL );
-	NSImage * customIcon = GetAppFileIcon( appURL, fileURL, uti );
-	if ( customIcon != nil )
-	{
-		if ( [fileURL setResourceValue: customIcon forKey: NSURLCustomIconKey error: NULL] == NO )
+		if ( [[NSFileManager defaultManager] fileExistsAtPath: [fileURL path]] == NO )
 		{
-			fprintf( stderr, "Failed to set custom icon for file.\n" );
+			fprintf( stderr, "File not found: %s", argv[optind] );
 			fflush( stderr );
-			exit( EX_SOFTWARE );
+			result = EX_DATAERR;
+			*stop = YES;
+			return;
 		}
-	}
+		
+		// got all the URLs we need now
+		
+		// get the file's UTI
+		NSString * uti = [[fileURL resourceValuesForKeys: [NSArray arrayWithObject: NSURLTypeIdentifierKey] error: NULL] objectForKey: NSURLTypeIdentifierKey];
+		
+		// remove any old usro resource
+		// if an app wasn't specified then we only remove the resource
+		RemoveUsroResource( fileURL );
+		if ( appURL == nil )
+		{
+			[fileURL setResourceValue: [NSNull null] forKey: NSURLCustomIconKey error: NULL];
+			return;
+		}
+		
+		InstallUsroResource( fileURL, appURL );
+		NSImage * customIcon = GetAppFileIcon( appURL, fileURL, uti );
+		if ( customIcon != nil )
+		{
+			if ( [fileURL setResourceValue: customIcon forKey: NSURLCustomIconKey error: NULL] == NO )
+			{
+				fprintf( stderr, "Failed to set custom icon for file.\n" );
+				fflush( stderr );
+				result = EX_SOFTWARE;
+				*stop = YES;
+				return;
+			}
+		}
+	}];
 	
-    return ( EX_OK );
+    return ( result );
 }
