@@ -64,7 +64,11 @@ static void usage( FILE * fp, int exitCode )
 			 "  %s [-a | --app-path] <file1> <file2> ...\n"
 			 "     Set named files to open using application bundle at <app-path>.\n"
 			 "  %s [-b | --bundle-id] <file1> <file2> ...\n"
-			 "     Set named files to open using application with a given identifier.\n",
+			 "     Set named files to open using application with a given identifier.\n"
+			 "\n"
+			 "Files to modify may be specified either on the command line or via\n"
+			 "standard input. If using standard input, the paths are expected to be\n"
+			 "separated by newline characters.",
 			 procName, procName, procName );
 	fflush( fp );
 	exit( exitCode );
@@ -187,13 +191,36 @@ int main (int argc, const char * argv[])
 		}
 	}
 	
-	if ( optind >= argc )
-		usage( stderr, EX_USAGE );
-	
-	// build the list of input files
 	NSMutableArray * files = [NSMutableArray array];
-	for ( int i = optind; i < argc; i++ )
-		[files addObject: [NSURL fileURLWithPath: [NSString stringWithUTF8String: argv[optind]]]];
+	
+	if ( optind < argc )
+	{
+		// build the list of input files from the command line
+		for ( int i = optind; i < argc; i++ )
+			[files addObject: [NSURL fileURLWithPath: [NSString stringWithUTF8String: argv[optind]]]];
+	}
+	else
+	{
+		NSData * data = [[NSFileHandle fileHandleWithStandardInput] readDataToEndOfFile];
+		if ( [data length] != 0 )
+		{
+			NSString * complete = [[NSString alloc] initWithData: data encoding: NSUTF8StringEncoding];
+			[complete enumerateLinesUsingBlock: ^(NSString *line, BOOL *stop)
+			{
+				// stop on an empty line
+				if ( [line length] == 0 )
+				{
+					*stop = YES;
+					return;
+				}
+				
+				[files addObject: [NSURL fileURLWithPath: line]];
+			}];
+		}
+	}
+	
+	if ( [files count] == 0 )
+		usage( stderr, EX_USAGE );	// dead call, terminates app
 	
 	__block int result = EX_OK;
 	
