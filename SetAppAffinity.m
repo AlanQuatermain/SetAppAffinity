@@ -58,18 +58,17 @@ static void usage(FILE *, int) __dead2;
 static void usage( FILE * fp, int exitCode )
 {
 	const char * procName = [[[NSProcessInfo processInfo] processName] UTF8String];
-	fprintf( fp,
-			 "Usage:\n"
-			 "  %s [-h | --help]					Display this list of options.\n",
-			 "  %s [-a | --app-path] <file1> <file2> ...\n"
-			 "     Set named files to open using application bundle at <app-path>.\n"
-			 "  %s [-b | --bundle-id] <file1> <file2> ...\n"
-			 "     Set named files to open using application with a given identifier.\n"
-			 "\n"
-			 "Files to modify may be specified either on the command line or via\n"
-			 "standard input. If using standard input, the paths are expected to be\n"
-			 "separated by newline characters.",
-			 procName, procName, procName );
+	fprintf( fp, "Usage:\n" );
+	fprintf( fp, "  %s [-h | --help]\n", procName );
+	fprintf( fp, "     Display this list of options.\n" );
+	fprintf( fp, "  %s [-a | --app-path] <file1> <file2> ...\n", procName );
+	fprintf( fp, "     Set named files to open using application bundle at <app-path>.\n" );
+	fprintf( fp, "  %s [-b | --bundle-id] <file1> <file2> ...\n", procName );
+	fprintf( fp, "     Set named files to open using application with a given identifier.\n" );
+	fprintf( fp, "\n" );
+	fprintf( fp, "Files to modify may be specified either on the command line or via\n" );
+	fprintf( fp, "standard input. If using standard input, the paths are expected to be\n" );
+	fprintf( fp, "separated by newline characters.\n" );
 	fflush( fp );
 	exit( exitCode );
 }
@@ -84,12 +83,36 @@ static void RemoveUsroResource( NSURL * fileURL )
 	}
 	
 	ResFileRefNum refnum = FSOpenResFile( &fsRef, fsRdWrPerm );
+	OSErr err = ResError();
+	if ( err != noErr )
+		return;
 	
 	Handle oldUsro = Get1Resource( 'usro', 0 );
 	if ( oldUsro != NULL )
 		RemoveResource( oldUsro );	// this invalidates the handle
 	
 	CloseResFile( refnum );
+}
+
+static ResFileRefNum NewResourceFile( FSRef *pFileRef, SInt8 permission )
+{
+	HFSUniStr255 resForkName = {0};
+	if ( FSGetResourceForkName(&resForkName) != noErr )
+		return ( -1 );
+	
+	OSErr err = FSCreateResourceFork( pFileRef, resForkName.length, resForkName.unicode, 0 );
+	if ( err != noErr )
+	{
+		fprintf( stderr, "FSCreateResourceFork error: %hd", err );
+		return ( -1 );
+	}
+	
+	ResFileRefNum refnum = 0;
+	err = FSOpenResourceFile( pFileRef, resForkName.length, resForkName.unicode, permission, &refnum );
+	if ( err != noErr )
+		fprintf( stderr, "FSOpenResourceFile error: %hd", err );
+	
+	return ( refnum );
 }
 
 static BOOL InstallUsroResource( NSURL * fileURL, NSURL * appURL )
@@ -112,10 +135,13 @@ static BOOL InstallUsroResource( NSURL * fileURL, NSURL * appURL )
 	memcpy( (bytes+sizeof(UInt32)), path, len );
 	
 	ResFileRefNum refnum = FSOpenResFile( &fileRef, fsRdWrPerm );
+	OSErr err = ResError();
+	if ( err != noErr )
+		refnum = NewResourceFile( &fileRef, fsRdWrPerm );
 	
 	// add the resource to the file
 	AddResource( newUsro, 'usro', 0, "\p" );	// last param is an empty Pascal string
-	DisposeHandle( newUsro );					// release the handle memory
+	// resource file assumes ownership of the handle now
 	
 	BOOL result = (ResError() == noErr);
 	
@@ -149,6 +175,9 @@ NSImage * GetAppFileIcon( NSURL * appURL, NSURL * fileURL, NSString * uti )
 int main (int argc, const char * argv[])
 {
 	NSURL * appURL = nil;
+	
+	if ( argc == 1 )
+		usage(stderr, EX_USAGE);	// dead call
     
 	int ch = 0;
 	while ( (ch = getopt_long(argc, (char **)argv, _shortCommandLineArgs, _longCommandLineArgs, NULL)) != -1 )
@@ -166,7 +195,7 @@ int main (int argc, const char * argv[])
 			case 'a':
 			{
 				NSString * path = [NSString stringWithUTF8String: optarg];
-				if ( [[NSFileManager defaultManager] fileExistsAtPath: [appURL path]] == NO )
+				if ( [[NSFileManager defaultManager] fileExistsAtPath: path] == NO )
 				{
 					fprintf( stderr, "Unable to locate application at path '%s'\n", optarg );
 					fflush( stderr );
